@@ -40,38 +40,40 @@ async function loadFromSupabase() {
     const db = getSupabaseClient();
 
     // Параллельные запросы
-    const PAYROLL_SELECT = 'id, registry_amount, deduction, after_deduction, platform_fee, total_payout, status, comment, employees(full_name, phone, inn), billing_periods(year, label)';
+    const PAYROLL_SELECT = 'id, registry_amount, deduction, after_deduction, platform_fee, total_payout, status, comment, employees(id, full_name, phone, inn), billing_periods(year, label)';
+
+    const PAGE = 1000;
+    const PAGES = 10; // до 10 000 записей
+
+    const payrollPages = Array.from({ length: PAGES }, (_, i) =>
+        db.from('payroll_records')
+          .select(PAYROLL_SELECT)
+          .order('id', { ascending: false })
+          .range(i * PAGE, (i + 1) * PAGE - 1)
+    );
 
     const [
-        { data: payrollRaw1,   error: errPay1 },
-        { data: payrollRaw2,   error: errPay2 },
-        { data: docsRaw,       error: errDoc },
-        { data: sheetsRaw,     error: errSh  },
-        { data: visitsRaw,     error: errVis },
+        payrollResults,
+        { data: docsRaw,  error: errDoc },
+        sheetsPages,
+        { data: visitsRaw, error: errVis },
         { data: invoicesRaw,   error: errInv },
         { data: txRaw,         error: errTx  }
     ] = await Promise.all([
-        // Выплаты стр.1 (0–999)
-        db.from('payroll_records')
-          .select(PAYROLL_SELECT)
-          .order('id', { ascending: false })
-          .range(0, 999),
-
-        // Выплаты стр.2 (1000–1999)
-        db.from('payroll_records')
-          .select(PAYROLL_SELECT)
-          .order('id', { ascending: false })
-          .range(1000, 1999),
+        Promise.all(payrollPages),
 
         // Документы: employee_documents + employees
         db.from('employee_documents')
           .select('id, doc_status, patent_series, patent_number, form_series, form_number, passport_issued_at, registration_end_at, patent_issued_at, contract_date, doc_link, contract_link, issues, vacation, employees(id, full_name, phone, inn, citizenship, position, birth_date, passport_data, fired_at, city, project)')
           .order('id'),
 
-        // Последний ресторан для каждого сотрудника (через salary_sheets)
-        db.from('salary_sheets')
-          .select('employee_id, restaurants(name)')
-          .order('id', { ascending: false }),
+        // Рестораны для каждого сотрудника (через salary_sheets, все страницы)
+        Promise.all([0,1,2,3,4].map(i =>
+            db.from('salary_sheets')
+              .select('employee_id, restaurants(name)')
+              .order('id', { ascending: true })
+              .range(i * 1000, (i + 1) * 1000 - 1)
+        )),
 
         // Объезды: document_visits + employees + restaurants
         db.from('document_visits')
@@ -89,19 +91,21 @@ async function loadFromSupabase() {
           .order('id', { ascending: false })
     ]);
 
-    if (errPay1) throw new Error('payroll_records p1: ' + errPay1.message);
-    if (errDoc)  throw new Error('employee_documents: ' + errDoc.message);
+    const errPay = payrollResults.find(r => r.error);
+    if (errPay) throw new Error('payroll_records: ' + errPay.error.message);
+    if (errDoc) throw new Error('employee_documents: ' + errDoc.message);
 
-    const payrollRaw = [...(payrollRaw1 || []), ...(payrollRaw2 || [])];
+    const payrollRaw = payrollResults.flatMap(r => r.data || []);
 
     console.log('[Supabase] Выплат:', payrollRaw.length,
                 '| Документов:', docsRaw?.length,
                 '| Объездов:', visitsRaw?.length);
 
-    // Карта employee_id → название ресторана (последнее)
+    // Карта employee_id → название ресторана (берём последнее вхождение)
+    const sheetsRaw = (sheetsPages || []).flatMap(r => r.data || []);
     const restaurantMap = {};
-    (sheetsRaw || []).forEach(s => {
-        if (s.employee_id && s.restaurants?.name && !restaurantMap[s.employee_id]) {
+    sheetsRaw.forEach(s => {
+        if (s.employee_id && s.restaurants?.name) {
             restaurantMap[s.employee_id] = s.restaurants.name;
         }
     });
@@ -114,6 +118,7 @@ async function loadFromSupabase() {
             employee:           p.employees?.full_name     || '',
             phone:              p.employees?.phone         || '',
             inn:                p.employees?.inn           || '',
+            restaurant:         restaurantMap[p.employees?.id] || '',
             amountRegistry:     parseFloat(p.registry_amount)    || 0,
             deduction:          parseFloat(p.deduction)          || 0,
             totalWithDeduction: parseFloat(p.after_deduction)    || 0,
@@ -254,10 +259,11 @@ function processLoadedData(result) {
                     return {
                         id:                  index + 1,
                         year:                item.year    || new Date().getFullYear(),
-                        period:              (item.period   || '').toString().trim(),
-                        employee:            (item.employee || '').toString().trim(),
+                        period:              (item.period      || '').toString().trim(),
+                        employee:            (item.employee    || '').toString().trim(),
                         phone:               normalizePhone(String(item.phone || '')),
-                        inn:                 (item.inn     || '').toString().trim(),
+                        inn:                 (item.inn         || '').toString().trim(),
+                        restaurant:          (item.restaurant  || '').toString().trim(),
                         amountRegistry:      parseFloat(item.amountRegistry)     || 0,
                         deduction:           parseFloat(item.deduction)          || 0,
                         totalWithDeduction:  parseFloat(item.totalWithDeduction) || 0,
@@ -404,10 +410,15 @@ function processLoadedData(result) {
 
     try { updateLastUpdateTime(); } catch (e) {}
 
+    try { populateRestaurantSwitcher(allPayments, allDocuments); } catch (e) {}
+
+    try { if (typeof renderHomeRestaurantWidget === 'function') renderHomeRestaurantWidget(); } catch (e) {}
+
     try {
         if (currentScreen === 'dashboard') {
             setTimeout(() => {
-                renderDashboardCharts();
+                if (typeof _switchDashboardMode === 'function') _switchDashboardMode();
+                else renderDashboardCharts();
                 if (typeof renderAccountsDashboard === 'function') renderAccountsDashboard();
             }, 100);
         }

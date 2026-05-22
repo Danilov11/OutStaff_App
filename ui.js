@@ -53,17 +53,10 @@ function showScreen(screenName, action = null) {
             }
             break;
         case 'dashboard':
-            // Проверяем пароль перед показом дашборда
-            checkDashboardPassword();
-            // После успешной проверки пароля графики отрисуются автоматически
+            if (elements.dashboardScreen) elements.dashboardScreen.classList.remove('hidden');
             setTimeout(() => {
-                if (elements.dashboardScreen && !elements.dashboardScreen.classList.contains('hidden')) {
-                    renderDashboardCharts();
-                    if (typeof renderAccountsDashboard === 'function') {
-                        renderAccountsDashboard();
-                    }
-                }
-            }, 100);
+                _switchDashboardMode();
+            }, 50);
             break;
         case 'rounds':
             if (elements.roundsScreen) {
@@ -91,39 +84,34 @@ function showScreen(screenName, action = null) {
                 console.error('Элемент employeeScreen не найден!');
             }
             break;
+        case 'admin':
+            if (elements.adminScreen) {
+                elements.adminScreen.classList.remove('hidden');
+                if (typeof initAdminScreen === 'function') initAdminScreen();
+            }
+            break;
     }
     
     console.log('Переключение на экран:', screenName);
 }
 
-// Проверка пароля для доступа к дашборду
-function checkDashboardPassword() {
-    // Проверяем, был ли уже введен правильный пароль в этой сессии
-    const dashboardAccessGranted = sessionStorage.getItem('dashboardAccessGranted') === 'true';
-    
-    if (dashboardAccessGranted) {
-        // Доступ уже предоставлен, показываем дашборд
-        if (elements.dashboardScreen) elements.dashboardScreen.classList.remove('hidden');
-        return;
-    }
-    
-    // Запрашиваем пароль
-    const password = prompt('Введите пароль для доступа к дашборду:');
-    
-    if (password === CONFIG.dashboardPassword) {
-        // Пароль правильный, сохраняем доступ в сессии
-        sessionStorage.setItem('dashboardAccessGranted', 'true');
-        if (elements.dashboardScreen) elements.dashboardScreen.classList.remove('hidden');
-    } else {
-        // Пароль неверный, возвращаемся на главную
-        alert('Неверный пароль. Доступ запрещен.');
-        showScreen('home');
-        // Убираем активность с кнопки дашборда
-        elements.navLinks.forEach(link => {
-            if (link.getAttribute('data-page') === 'dashboard') {
-                link.classList.remove('active');
-            }
-        });
+// Переключение между ресторанным и общим дашбордом
+function _switchDashboardMode() {
+    const hasRestaurantDash = typeof renderRestaurantDashboard === 'function'
+        && renderRestaurantDashboard() !== false;
+
+    const genericEl = document.getElementById('generic-dashboard');
+
+    // renderRestaurantDashboard показывает/скрывает #restaurant-dashboard сам
+    // Если ресторанный дашборд активен — скрыть общий, иначе показать
+    const rEl = document.getElementById('restaurant-dashboard');
+    const isRestaurant = rEl && !rEl.classList.contains('hidden');
+
+    if (genericEl) genericEl.style.display = isRestaurant ? 'none' : '';
+
+    if (!isRestaurant) {
+        renderDashboardCharts();
+        if (typeof renderAccountsDashboard === 'function') renderAccountsDashboard();
     }
 }
 
@@ -1356,4 +1344,220 @@ function renderAttentionScreen() {
               issues.patExpiring, i => empRow(i, `${i.date}${badge(i.days)}`), 'Патенты в норме ✓') +
           section('fa-exclamation-circle', 'Проблемы с документами', 'er',
               issues.withIssues, i => empRow(i, `<span style="color:var(--er-fg)">${i.text}</span>`), 'Проблем нет ✓');
+}
+
+// ══════════════════════════════════════════════════════════════
+// МОДАЛКА: Добавить сотрудника
+// ══════════════════════════════════════════════════════════════
+function openAddEmployeeModal() {
+    const modal = document.getElementById('add-employee-modal');
+    if (!modal) { console.error('Modal #add-employee-modal not found'); return; }
+
+    // Показываем сразу
+    modal.classList.remove('hidden');
+
+    // Сброс формы
+    ['ae-name','ae-inn','ae-phone','ae-position','ae-citizenship'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+    });
+    ['ae-restaurant','ae-docstatus'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.selectedIndex = 0;
+    });
+    const msg = document.getElementById('ae-msg');
+    if (msg) msg.textContent = '';
+
+    // Заполняем список ресторанов асинхронно (после показа)
+    const sel = document.getElementById('ae-restaurant');
+    if (sel && sel.options.length <= 1) {
+        const db = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+        if (db) {
+            db.from('restaurants').select('id, name').order('name').then(({ data }) => {
+                (data || []).forEach(r => {
+                    if (sel.querySelector(`option[value="${r.id}"]`)) return;
+                    const o = document.createElement('option');
+                    o.value = r.id; o.textContent = r.name;
+                    sel.appendChild(o);
+                });
+            });
+        }
+    }
+}
+
+function closeAddEmployeeModal() {
+    document.getElementById('add-employee-modal')?.classList.add('hidden');
+}
+
+async function submitAddEmployee() {
+    const name       = document.getElementById('ae-name')?.value.trim();
+    const inn        = document.getElementById('ae-inn')?.value.trim().replace(/\D/g,'') || null;
+    const phone      = document.getElementById('ae-phone')?.value.trim() || null;
+    const position   = document.getElementById('ae-position')?.value.trim() || null;
+    const citizen    = document.getElementById('ae-citizenship')?.value.trim() || null;
+    const restId     = document.getElementById('ae-restaurant')?.value || null;
+    const docStatus  = document.getElementById('ae-docstatus')?.value || null;
+    const msg        = document.getElementById('ae-msg');
+    const btn        = document.getElementById('ae-submit-btn');
+
+    if (!name) {
+        if (msg) { msg.style.color = 'var(--er-fg)'; msg.textContent = 'Введите ФИО сотрудника'; }
+        return;
+    }
+
+    if (btn) btn.disabled = true;
+    if (msg) { msg.style.color = 'var(--tx2)'; msg.textContent = 'Сохранение…'; }
+
+    const db = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+    if (!db) { if (msg) { msg.style.color='var(--er-fg)'; msg.textContent='Нет подключения к БД'; } if(btn) btn.disabled=false; return; }
+
+    try {
+        // 1. Вставляем сотрудника
+        const empData = { full_name: name };
+        if (inn)      empData.inn         = inn;
+        if (phone)    empData.phone       = phone;
+        if (position) empData.position    = position;
+        if (citizen)  empData.citizenship = citizen;
+
+        const { data: empRow, error: empErr } = await db.from('employees').insert(empData).select('id').single();
+        if (empErr) throw empErr;
+
+        // 2. Привязываем к ресторану
+        if (restId) {
+            await db.from('salary_sheets').insert({ employee_id: empRow.id, restaurant_id: parseInt(restId) });
+        }
+
+        // 3. Статус документов
+        if (docStatus) {
+            await db.from('employee_documents').insert({ employee_id: empRow.id, doc_status: docStatus });
+        }
+
+        if (msg) { msg.style.color = 'var(--ok-fg)'; msg.textContent = `✓ Сотрудник «${name}» добавлен`; }
+        setTimeout(() => {
+            closeAddEmployeeModal();
+            if (typeof loadData === 'function') loadData();
+        }, 1200);
+    } catch(e) {
+        if (msg) { msg.style.color = 'var(--er-fg)'; msg.textContent = 'Ошибка: ' + e.message; }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ФОРМА ОБЪЕЗДА: Заказать документы
+// ══════════════════════════════════════════════════════════════
+let _dofEmployeeId = null; // выбранный сотрудник
+
+function openDocOrderForm() {
+    const form = document.getElementById('doc-order-form');
+    if (!form) { console.error('doc-order-form not found'); return; }
+
+    // Сброс и показ сразу
+    _dofEmployeeId = null;
+    ['dof-employee','dof-reason','dof-comment'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    const dateEl = document.getElementById('dof-date');
+    if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+    const msg = document.getElementById('dof-msg'); if(msg) msg.textContent='';
+
+    form.classList.remove('hidden');
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // Заполняем рестораны асинхронно
+    const restSel = document.getElementById('dof-restaurant');
+    if (restSel && restSel.options.length <= 1) {
+        const db = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+        if (db) {
+            const allowed = typeof getUserRestaurants === 'function' ? getUserRestaurants() : null;
+            db.from('restaurants').select('id, name').order('name').then(({ data }) => {
+                (data || []).forEach(r => {
+                    if (allowed && !allowed.map(n=>n.toUpperCase()).includes(r.name.toUpperCase())) return;
+                    if (restSel.querySelector(`option[value="${r.id}"]`)) return;
+                    const o = document.createElement('option');
+                    o.value = r.id; o.textContent = r.name;
+                    restSel.appendChild(o);
+                });
+            });
+        }
+    }
+
+    // Автодополнение по сотруднику
+    const empInput = document.getElementById('dof-employee');
+    const suggBox  = document.getElementById('dof-employee-suggestions');
+    if (empInput && !empInput._dofBound) {
+        empInput._dofBound = true;
+        empInput.addEventListener('input', async () => {
+            const q = empInput.value.trim();
+            if (q.length < 2) { suggBox.classList.add('hidden'); return; }
+            const db = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+            if (!db) return;
+            const { data } = await db.from('employees')
+                .select('id, full_name, inn')
+                .ilike('full_name', `%${q}%`)
+                .limit(8);
+            if (!data?.length) { suggBox.classList.add('hidden'); return; }
+            suggBox.innerHTML = data.map(e =>
+                `<div class="emp-sug-item" data-id="${e.id}" data-name="${e.full_name}">
+                    <strong>${e.full_name}</strong>${e.inn ? ` <span style="color:var(--tx3);font-size:11px">ИНН ${e.inn}</span>` : ''}
+                </div>`).join('');
+            suggBox.classList.remove('hidden');
+            suggBox.querySelectorAll('.emp-sug-item').forEach(item => {
+                item.addEventListener('mousedown', () => {
+                    _dofEmployeeId = parseInt(item.dataset.id);
+                    empInput.value = item.dataset.name;
+                    suggBox.classList.add('hidden');
+                });
+            });
+        });
+        empInput.addEventListener('blur', () => setTimeout(() => suggBox.classList.add('hidden'), 200));
+    }
+}
+
+function closeDocOrderForm() {
+    document.getElementById('doc-order-form')?.classList.add('hidden');
+}
+
+async function submitDocOrder() {
+    const empName  = document.getElementById('dof-employee')?.value.trim();
+    const restId   = document.getElementById('dof-restaurant')?.value;
+    const date     = document.getElementById('dof-date')?.value;
+    const reason   = document.getElementById('dof-reason')?.value.trim() || null;
+    const comment  = document.getElementById('dof-comment')?.value.trim() || null;
+    const msg      = document.getElementById('dof-msg');
+
+    if (!empName) { if(msg){msg.style.color='var(--er-fg)';msg.textContent='Укажите сотрудника';} return; }
+    if (!restId)  { if(msg){msg.style.color='var(--er-fg)';msg.textContent='Выберите ресторан';} return; }
+    if (!date)    { if(msg){msg.style.color='var(--er-fg)';msg.textContent='Укажите дату';} return; }
+
+    const db = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+    if (!db) { if(msg){msg.style.color='var(--er-fg)';msg.textContent='Нет подключения к БД';} return; }
+
+    if(msg){msg.style.color='var(--tx2)';msg.textContent='Создание…';}
+
+    try {
+        // Если сотрудник не выбран из списка — ищем по имени
+        let empId = _dofEmployeeId;
+        if (!empId) {
+            const { data } = await db.from('employees').select('id').ilike('full_name', empName).limit(1);
+            empId = data?.[0]?.id || null;
+        }
+
+        const record = {
+            restaurant_id: parseInt(restId),
+            planned_date:  date,
+            status:        'Запланировано',
+        };
+        if (empId)   record.employee_id  = empId;
+        if (reason)  record.paper_reason = reason;
+        if (comment) record.admin_comment = comment;
+
+        const { error } = await db.from('document_visits').insert(record);
+        if (error) throw error;
+
+        if(msg){msg.style.color='var(--ok-fg)';msg.textContent='✓ Заказ создан';}
+        setTimeout(() => {
+            closeDocOrderForm();
+            if (typeof loadData === 'function') loadData();
+        }, 1000);
+    } catch(e) {
+        if(msg){msg.style.color='var(--er-fg)';msg.textContent='Ошибка: '+e.message;}
+    }
 }

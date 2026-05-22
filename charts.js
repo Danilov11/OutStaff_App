@@ -1,13 +1,87 @@
 // charts.js
 // Графики для дашборда и отображение счетов
 
+// ── Палитра дизайн-системы для Chart.js ──────────────────────────────────────
+const DS = {
+    // Семантические цвета — те же оттенки дизайн-системы, чуть светлее
+    ok:   '#3d7d60',  // ok-fg #2d5f49 + яркость
+    ca:   '#9a7820',  // ca-fg #7a5f14 + яркость
+    teal: '#1a6a80',  // teal  #0f4c5c + яркость
+    tx2:  '#6d8295',  // tx2   #556575 + яркость
+    er:   '#b54850',  // er-fg #8f383f + яркость
+
+    // Расширенная палитра — те же оттенки дизайн-системы, чуть светлее
+    palette: [
+        '#1a6a80', // teal
+        '#3d7d60', // ok-fg
+        '#9a7820', // ca-fg
+        '#b54850', // er-fg
+        '#1e85a0', // teal-h
+        '#5e9e89', // зелёный средний
+        '#b89232', // янтарный средний
+        '#6d8295', // tx2
+        '#c46070', // красный средний
+        '#93a7bc', // tx3
+    ],
+
+    // Цвета для bar-графиков (оригинал дизайн-системы)
+    barPrimary: '#0f4c5c',
+    barOk:      '#2d5f49',
+};
+
+// Общие опции для donut-графиков
+function doughnutOptions(total, legendPos = 'right') {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '72%',
+        plugins: {
+            legend: {
+                position: legendPos,
+                labels: {
+                    boxWidth: 14,
+                    boxHeight: 14,
+                    borderRadius: 4,
+                    useBorderRadius: true,
+                    padding: 16,
+                    color: '#141c26',
+                    font: { family: 'Montserrat', size: 13, weight: '600' },
+                }
+            },
+            tooltip: {
+                backgroundColor: '#141c26',
+                titleFont: { family: 'Montserrat', size: 12, weight: '600' },
+                bodyFont:  { family: 'Montserrat', size: 12 },
+                padding: 10,
+                cornerRadius: 8,
+                callbacks: {
+                    label(ctx) {
+                        const v = ctx.parsed || 0;
+                        const pct = total > 0 ? ((v / total) * 100).toFixed(1) : 0;
+                        return `  ${ctx.label}: ${v} (${pct}%)`;
+                    }
+                }
+            }
+        }
+    };
+}
+
 // Функции для графиков на дашборде
+// Документы, доступные текущему пользователю (фильтр по группе)
+function _getFilteredDocuments() {
+    if (typeof canAccessRestaurant !== 'function') return allDocuments;
+    return allDocuments.filter(doc => {
+        if (!doc.restaurant) return true; // без ресторана показываем
+        return canAccessRestaurant(doc.restaurant);
+    });
+}
+
 function renderDashboardCharts() {
     if (currentScreen !== 'dashboard') return;
-    
+
     // Обновляем карточки с метриками
     updateDashboardStats();
-    
+
     // Рендерим все графики
     renderStatusChart();
     renderPositionChart();
@@ -16,20 +90,21 @@ function renderDashboardCharts() {
 
 // Обновление карточек с метриками
 function updateDashboardStats() {
-    const total = allDocuments.length;
-    const processed = allDocuments.filter(d => {
+    const docs = _getFilteredDocuments();
+    const total = docs.length;
+    const processed = docs.filter(d => {
         const status = (d.realStatus || '').toLowerCase();
         return status.includes('оформлен') && !status.includes('на оформлении') && !status.includes('уволен');
     }).length;
-    
-    const inProcess = allDocuments.filter(d => {
+
+    const inProcess = docs.filter(d => {
         const status = (d.realStatus || '').toLowerCase();
-        return (status.includes('на оформлении') || status.includes('обработке') || status.includes('обновлено')) 
+        return (status.includes('на оформлении') || status.includes('обработке') || status.includes('обновлено'))
             && !status.includes('уволен');
     }).length;
-    
+
     // Уволенные - те, у кого в статусе есть "уволен" или есть дата увольнения
-    const dismissed = allDocuments.filter(d => {
+    const dismissed = docs.filter(d => {
         const status = (d.realStatus || '').toLowerCase();
         const hasDismissedDate = d.dismissedDate && d.dismissedDate.trim() !== '';
         return status.includes('уволен') || hasDismissedDate;
@@ -73,10 +148,10 @@ function renderStatusChart() {
         'Не оформлен': 0
     };
     
-    allDocuments.forEach(doc => {
+    _getFilteredDocuments().forEach(doc => {
         const status = doc.realStatus || '';
         const statusLower = status.toLowerCase();
-        
+
         // Проверяем уволенных отдельно
         if (statusLower.includes('уволен') || (doc.dismissedDate && doc.dismissedDate.trim() !== '')) {
             statusCounts['Уволено']++;
@@ -91,8 +166,8 @@ function renderStatusChart() {
         }
     });
     
-    const total = allDocuments.length;
-    
+    const total = Object.values(statusCounts).reduce((a, b) => a + b, 0);
+
     new Chart(ctx, {
         type: 'doughnut',
         data: {
@@ -105,42 +180,13 @@ function renderStatusChart() {
                     statusCounts['Уволено'],
                     statusCounts['Не оформлен']
                 ],
-                backgroundColor: [
-                    'rgba(16, 185, 129, 0.8)',  // Зеленый - оформлен
-                    'rgba(245, 158, 11, 0.8)',  // Желтый - на оформлении
-                    'rgba(59, 130, 246, 0.8)',  // Синий - в обработке
-                    'rgba(139, 92, 246, 0.8)',  // Фиолетовый - уволено
-                    'rgba(239, 68, 68, 0.8)'   // Красный - не оформлен
-                ],
-                borderColor: [
-                    'rgb(16, 185, 129)',
-                    'rgb(245, 158, 11)',
-                    'rgb(59, 130, 246)',
-                    'rgb(139, 92, 246)',
-                    'rgb(239, 68, 68)'
-                ],
-                borderWidth: 2
+                backgroundColor: [DS.ok, DS.ca, DS.teal, DS.tx2, DS.er],
+                borderColor: '#ffffff',
+                borderWidth: 2,
+                hoverOffset: 6,
             }]
         },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'right'
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const label = context.label || '';
-                            const value = context.parsed || 0;
-                            const percent = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-                            return `${label}: ${value} (${percent}%)`;
-                        }
-                    }
-                }
-            }
-        }
+        options: doughnutOptions(total),
     });
 }
 
@@ -158,7 +204,7 @@ function renderRestaurantChart() {
     // Группируем по ресторанам
     const restaurantData = {};
     
-    allDocuments.forEach(doc => {
+    _getFilteredDocuments().forEach(doc => {
         const restaurant = doc.restaurant || 'Не указан';
         if (!restaurantData[restaurant]) {
             restaurantData[restaurant] = {
@@ -192,16 +238,18 @@ function renderRestaurantChart() {
                 {
                     label: 'Подано на оформление',
                     data: totalData,
-                    backgroundColor: 'rgba(59, 130, 246, 0.6)',
-                    borderColor: 'rgb(59, 130, 246)',
-                    borderWidth: 1
+                    backgroundColor: DS.barPrimary + 'aa',
+                    borderColor: DS.barPrimary,
+                    borderWidth: 1,
+                    borderRadius: 4,
                 },
                 {
                     label: 'Оформлено',
                     data: processedData,
-                    backgroundColor: 'rgba(16, 185, 129, 0.6)',
-                    borderColor: 'rgb(16, 185, 129)',
-                    borderWidth: 1
+                    backgroundColor: DS.barOk + 'aa',
+                    borderColor: DS.barOk,
+                    borderWidth: 1,
+                    borderRadius: 4,
                 }
             ]
         },
@@ -211,14 +259,28 @@ function renderRestaurantChart() {
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: {
-                        stepSize: 1
-                    }
+                    ticks: { stepSize: 1, font: { family: 'Montserrat', size: 11 }, color: '#556575' },
+                    grid: { color: '#e2e8ef' }
+                },
+                x: {
+                    ticks: { font: { family: 'Montserrat', size: 11 }, color: '#556575' },
+                    grid: { display: false }
                 }
             },
             plugins: {
                 legend: {
-                    position: 'top'
+                    position: 'top',
+                    labels: {
+                        boxWidth: 10, boxHeight: 10, borderRadius: 3, useBorderRadius: true,
+                        padding: 14, color: '#141c26',
+                        font: { family: 'Montserrat', size: 12, weight: '500' }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: '#141c26',
+                    titleFont: { family: 'Montserrat', size: 12, weight: '600' },
+                    bodyFont:  { family: 'Montserrat', size: 12 },
+                    padding: 10, cornerRadius: 8,
                 }
             }
         }
@@ -238,7 +300,7 @@ function renderPositionChart() {
     // Группируем по должностям
     const positionData = {};
     
-    allDocuments.forEach(doc => {
+    _getFilteredDocuments().forEach(doc => {
         const position = doc.position || 'Не указана';
         if (!positionData[position]) {
             positionData[position] = 0;
@@ -249,56 +311,21 @@ function renderPositionChart() {
     const positions = Object.keys(positionData).sort((a, b) => positionData[b] - positionData[a]);
     const counts = positions.map(p => positionData[p]);
     
-    // Генерируем цвета
-    const colors = [
-        'rgba(59, 130, 246, 0.8)',   // Синий
-        'rgba(16, 185, 129, 0.8)',   // Зеленый
-        'rgba(245, 158, 11, 0.8)',   // Желтый
-        'rgba(239, 68, 68, 0.8)',    // Красный
-        'rgba(139, 92, 246, 0.8)',   // Фиолетовый
-        'rgba(236, 72, 153, 0.8)',   // Розовый
-        'rgba(14, 165, 233, 0.8)',   // Голубой
-        'rgba(34, 197, 94, 0.8)'     // Светло-зеленый
-    ];
-    
+    const total = counts.reduce((a, b) => a + b, 0);
+
     new Chart(ctx, {
         type: 'doughnut',
         data: {
             labels: positions,
             datasets: [{
                 data: counts,
-                backgroundColor: colors.slice(0, positions.length),
-                borderColor: colors.slice(0, positions.length).map(c => c.replace('0.8', '1')),
-                borderWidth: 2
+                backgroundColor: DS.palette.slice(0, positions.length),
+                borderColor: '#ffffff',
+                borderWidth: 2,
+                hoverOffset: 6,
             }]
         },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'right',
-                    labels: {
-                        boxWidth: 12,
-                        padding: 10,
-                        font: {
-                            size: 12
-                        }
-                    }
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const label = context.label || '';
-                            const value = context.parsed || 0;
-                            const total = counts.reduce((a, b) => a + b, 0);
-                            const percent = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-                            return `${label}: ${value} (${percent}%)`;
-                        }
-                    }
-                }
-            }
-        }
+        options: doughnutOptions(total),
     });
 }
 

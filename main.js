@@ -22,6 +22,8 @@ let allStatuses = [];
 let allPositions = [];
 let allRestaurants = [];
 let lastPeriod = '';
+let currentRestaurant = '';      // глобальный фильтр по ресторану
+let currentRestaurantGroup = null; // массив ресторанов при выборе группы
 let currentScreen = 'home'; // 'home', 'payments', 'documents', 'rounds', 'dashboard', 'sos', 'employee'
 
 // Элементы DOM - будем заполнять после загрузки DOM
@@ -29,50 +31,53 @@ const elements = {};
 
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', () => {
-    // Проверка пароля для доступа к платформе
-    checkPlatformPassword();
-    
-    // Сначала инициализируем элементы DOM
     initializeDOMElements();
-    
-    // Затем настраиваем обработчики событий
     setupEventListeners();
-    
-    // И только потом загружаем данные
-    loadData();
+
+    // Авторизация: показываем логин или грузим данные
+    if (authInit()) {
+        showAppAfterLogin();
+    } else {
+        document.getElementById('login-overlay')?.classList.remove('hidden');
+    }
     
     // Обновление времени последнего обновления
-    updateLastUpdateTime();
-    
-    // Периодическое обновление данных
-    setInterval(() => {
-        loadData();
-    }, CONFIG.refreshInterval);
 });
 
 // Проверка пароля для доступа к платформе
-function checkPlatformPassword() {
-    // Проверяем, был ли уже введен правильный пароль в этой сессии
-    const platformAccessGranted = sessionStorage.getItem('platformAccessGranted') === 'true';
-    
-    if (platformAccessGranted) {
-        // Доступ уже предоставлен
+function showAppAfterLogin() {
+    document.getElementById('login-overlay')?.classList.add('hidden');
+
+    // Сотрудник — личный кабинет, без основного интерфейса
+    if (currentUser?.role === 'employee') {
+        document.getElementById('cabinet-overlay')?.classList.remove('hidden');
+        if (typeof renderEmployeeCabinet === 'function') renderEmployeeCabinet();
         return;
     }
-    
-    // Запрашиваем пароль
-    const password = prompt('Введите пароль для доступа к платформе:');
-    
-    if (password === CONFIG.platformPassword) {
-        // Пароль правильный, сохраняем доступ в сессии
-        sessionStorage.setItem('platformAccessGranted', 'true');
-    } else {
-        // Пароль неверный, блокируем доступ
-        alert('Неверный пароль. Доступ запрещен.');
-        // Перенаправляем на пустую страницу или показываем сообщение
-        document.body.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; height: 100vh; font-size: 24px;">Доступ запрещен. Обновите страницу и введите правильный пароль.</div>';
-        throw new Error('Access denied');
+
+    // Показать имя пользователя и кнопку выхода
+    if (elements.navUserName) elements.navUserName.textContent = currentUser?.name || '';
+
+    // Показать кнопку «Импорт» только администратору
+    document.querySelectorAll('.nav-link.admin-only').forEach(el => {
+        el.classList.toggle('hidden', currentUser?.login !== 'admin');
+    });
+
+    // Применить ограничение по группе ресторанов
+    const groupRestaurants = getUserRestaurants(); // null = все
+    if (groupRestaurants && groupRestaurants.length === 1) {
+        // Один ресторан — скрываем переключатель, фиксируем
+        currentRestaurant = groupRestaurants[0];
+        if (elements.restaurantSwitcher) elements.restaurantSwitcher.style.display = 'none';
+    } else if (groupRestaurants) {
+        // Несколько адресов (Чайхана) — показываем только их
+        currentRestaurant = '';
     }
+    // else admin — всё видно
+
+    loadData();
+    updateLastUpdateTime();
+    setInterval(() => { updateLastUpdateTime(); }, 60000);
 }
 
 // Инициализация элементов DOM
@@ -85,6 +90,7 @@ function initializeDOMElements() {
     elements.dashboardScreen = document.getElementById('dashboard-screen');
     elements.sosScreen = document.getElementById('sos-screen');
     elements.employeeScreen = document.getElementById('employee-screen');
+    elements.adminScreen = document.getElementById('admin-screen');
 
     // Фильтры объездов
     elements.roundsStatusFilter     = document.getElementById('rounds-status-filter');
@@ -99,12 +105,26 @@ function initializeDOMElements() {
     // Навигация
     elements.navLinks = document.querySelectorAll('.nav-link');
     elements.quickActionBtns = document.querySelectorAll('.quick-action-btn');
-    elements.partnerNameBtn = document.querySelector('.brand-partner-name[data-page="home"]');
-    
+    // Авторизация
+    elements.loginOverlay  = document.getElementById('login-overlay');
+    elements.loginInput    = document.getElementById('login-input');
+    elements.passwordInput = document.getElementById('password-input');
+    elements.loginBtn      = document.getElementById('login-btn');
+    elements.loginError    = document.getElementById('login-error');
+    elements.navLogoutBtn  = document.getElementById('nav-logout-btn');
+    elements.navUserName   = document.getElementById('nav-user-name');
+
+    // Переключатель ресторана
+    elements.restaurantSwitcher         = document.getElementById('restaurant-switcher');
+    elements.restaurantSwitcherBtn      = document.getElementById('restaurant-switcher-btn');
+    elements.restaurantSwitcherLabel    = document.getElementById('restaurant-switcher-label');
+    elements.restaurantSwitcherDropdown = document.getElementById('restaurant-switcher-dropdown');
+
     // Фильтры
-    elements.periodYearFilter = document.getElementById('period-year-filter');
-    elements.statusFilter = document.getElementById('status-filter');
-    elements.searchInput = document.getElementById('search-input');
+    elements.periodYearFilter  = document.getElementById('period-year-filter');
+    elements.statusFilter      = document.getElementById('status-filter');
+    elements.restaurantFilter  = null; // удалён — используем глобальный switcher
+    elements.searchInput       = document.getElementById('search-input');
     elements.resetFiltersBtn = document.getElementById('reset-filters');
     elements.lastPeriodBtn = document.getElementById('last-period');
     elements.lastUnpaidBtn = document.getElementById('last-unpaid');
@@ -216,11 +236,84 @@ function setupEventListeners() {
         });
     });
     
+    // Авторизация
+    if (elements.loginBtn) {
+        const doLogin = async () => {
+            const login = elements.loginInput?.value || '';
+            const pass  = elements.passwordInput?.value || '';
+            if (authLogin(login, pass)) {
+                elements.loginError?.classList.add('hidden');
+                showAppAfterLogin();
+                return;
+            }
+            // Попытка входа сотрудника: ИНН = логин = пароль
+            const innVal = login.trim().replace(/\D/g, '');
+            if (login.trim() === pass.trim() && innVal.length >= 10 && innVal.length <= 12) {
+                document.getElementById('login-overlay')?.classList.add('hidden');
+                const cabOverlay = document.getElementById('cabinet-overlay');
+                if (cabOverlay) {
+                    cabOverlay.classList.remove('hidden');
+                    cabOverlay.innerHTML = `
+                        <div class="cab-topbar">
+                            <div class="cab-topbar-brand">
+                                <img src="лого.png" alt="" class="cab-topbar-logo">
+                                <span>Личный кабинет</span>
+                            </div>
+                        </div>
+                        <div class="cab-body" id="cab-body" style="display:flex;align-items:center;justify-content:center;min-height:200px;">
+                            <div class="loading"><div class="spinner"></div><p>Загрузка…</p></div>
+                        </div>`;
+                }
+                let ok = false;
+                try { ok = await authLoginEmployee(innVal); } catch(e) { console.error('[login] authLoginEmployee error:', e); }
+                if (ok) {
+                    elements.loginError?.classList.add('hidden');
+                    try {
+                        await renderEmployeeCabinet();
+                    } catch(e) {
+                        console.error('[login] renderEmployeeCabinet error:', e);
+                        const body = document.getElementById('cab-body');
+                        if (body) body.innerHTML = `<div class="error-message" style="margin:40px auto;max-width:480px;"><i class="fas fa-exclamation-triangle"></i><p>Ошибка загрузки: ${e.message}</p></div>`;
+                    }
+                    return;
+                }
+                // ИНН не найден в базе — возвращаем логин
+                if (cabOverlay) cabOverlay.classList.add('hidden');
+                document.getElementById('login-overlay')?.classList.remove('hidden');
+                elements.loginError?.classList.remove('hidden');
+                elements.loginError.textContent = 'Сотрудник с таким ИНН не найден';
+                elements.passwordInput.value = '';
+                elements.passwordInput.focus();
+                return;
+            }
+            elements.loginError?.classList.remove('hidden');
+            elements.passwordInput.value = '';
+            elements.passwordInput.focus();
+        };
+        elements.loginBtn.addEventListener('click', doLogin);
+        elements.passwordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+        elements.loginInput?.addEventListener('keydown', e => { if (e.key === 'Enter') elements.passwordInput?.focus(); });
+    }
+    if (elements.navLogoutBtn) {
+        elements.navLogoutBtn.addEventListener('click', authLogout);
+    }
+
+    // Переключатель ресторана (глобальный)
+    if (elements.restaurantSwitcherBtn) {
+        elements.restaurantSwitcherBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            elements.restaurantSwitcher.classList.toggle('open');
+        });
+    }
+    document.addEventListener('click', () => {
+        if (elements.restaurantSwitcher) elements.restaurantSwitcher.classList.remove('open');
+    });
+
     // Фильтры выплат (проверяем существование элементов)
     if (elements.periodYearFilter) elements.periodYearFilter.addEventListener('change', applyFilters);
-    if (elements.statusFilter) elements.statusFilter.addEventListener('change', applyFilters);
-    if (elements.searchInput) elements.searchInput.addEventListener('input', debounce(applyFilters, 300));
-    if (elements.resetFiltersBtn) elements.resetFiltersBtn.addEventListener('click', resetFilters);
+    if (elements.statusFilter)     elements.statusFilter.addEventListener('change', applyFilters);
+    if (elements.searchInput)      elements.searchInput.addEventListener('input', debounce(applyFilters, 300));
+    if (elements.resetFiltersBtn)  elements.resetFiltersBtn.addEventListener('click', resetFilters);
     
     // Фильтры объездов
     if (elements.roundsStatusFilter)    elements.roundsStatusFilter.addEventListener('change', applyRoundsFilters);
@@ -383,3 +476,166 @@ function generateTestData() {
 
 // Глобальная функция для выхода из режима
 window.exitMode = exitMode;
+
+// ── Переключатель ресторана ───────────────────────────────────────────────────
+function populateRestaurantSwitcher(payments, documents) {
+    const el = elements.restaurantSwitcherDropdown;
+    if (!el) return;
+
+    const fromPayments  = (payments  || []).map(p => p.restaurant).filter(Boolean);
+    const fromDocuments = (documents || []).map(d => d.restaurant).filter(Boolean);
+    const allLoaded     = [...new Set([...fromPayments, ...fromDocuments])].sort();
+
+    // Фильтруем по правам доступа
+    const userGroup     = getUserGroupName();       // null = admin
+    const userAllowed   = getUserRestaurants();     // null = все
+    const restaurants   = userAllowed
+        ? allLoaded.filter(r => userAllowed.includes(r))
+        : allLoaded;
+
+    el.innerHTML = '';
+
+    const addItem = (value, label, indent = false) => {
+        const div = document.createElement('div');
+        div.className = 'restaurant-switcher-item'
+            + (indent ? ' indent' : '')
+            + (currentRestaurant === value ? ' active' : '');
+        div.dataset.restaurant = value;
+        div.textContent = label;
+        div.addEventListener('click', () => selectRestaurant(value));
+        el.appendChild(div);
+    };
+
+    const addGroup = (label) => {
+        const div = document.createElement('div');
+        div.className = 'restaurant-switcher-group';
+        div.textContent = label;
+        el.appendChild(div);
+    };
+
+    if (!userGroup) {
+        // Администратор: сгруппированный вид
+        addItem('', 'Все рестораны');
+
+        const grouped = RESTAURANT_GROUPS;
+        for (const [groupName, members] of Object.entries(grouped)) {
+            const visible = restaurants.filter(r => members.includes(r));
+            if (!visible.length) continue;
+            addGroup(groupName);
+            if (members.length > 1) addItem('__GROUP__' + groupName, 'Все ' + groupName.toLowerCase(), true);
+            visible.forEach(r => addItem(r, r, members.length > 1));
+        }
+    } else if (userAllowed && userAllowed.length > 1) {
+        // Чайхана: все адреса + отдельные
+        addItem('', 'Все адреса');
+        restaurants.forEach(r => addItem(r, r));
+    }
+    // Один ресторан — switcher скрыт, не рисуем
+}
+
+// ── Виджет ресторана на главной ──────────────────────────────────────────────
+function renderHomeRestaurantWidget() {
+    const wrap = document.getElementById('home-restaurant-widget');
+    if (!wrap) return;
+
+    const groupRests = getUserRestaurants(); // null = admin, array = group
+    if (!groupRests) { wrap.classList.add('hidden'); return; }
+
+    // Собираем выплаты по разрешённым ресторанам
+    const relevant = allPayments.filter(p => groupRests.includes(p.restaurant));
+    if (!relevant.length) { wrap.classList.add('hidden'); return; }
+
+    // Последний период
+    const periods = [...new Set(relevant.map(p => p.period).filter(Boolean))].sort();
+    const last = periods[periods.length - 1];
+    if (!last) { wrap.classList.add('hidden'); return; }
+
+    const lastRows = relevant.filter(p => p.period === last);
+    const totalFund   = lastRows.reduce((s, p) => s + (p.amount || 0), 0);
+    const empCount    = new Set(lastRows.map(p => p.inn || p.employee).filter(Boolean)).size;
+    const paidCount   = lastRows.filter(p => {
+        const sl = (p.status || '').toLowerCase();
+        return sl.includes('оплат') && !sl.includes('не');
+    }).length;
+    const paidPct     = lastRows.length ? Math.round(paidCount / lastRows.length * 100) : 0;
+
+    // Предыдущий период для тренда
+    const prevPeriod  = periods[periods.length - 2];
+    const prevFund    = prevPeriod
+        ? relevant.filter(p => p.period === prevPeriod).reduce((s, p) => s + (p.amount || 0), 0)
+        : null;
+    const trendDelta  = prevFund != null ? totalFund - prevFund : null;
+    const trendSign   = trendDelta === null ? '' : trendDelta > 0 ? '+' : '';
+    const trendCls    = trendDelta === null ? '' : trendDelta >= 0 ? 'trend-up' : 'trend-down';
+    const trendIcon   = trendDelta === null ? '' : trendDelta >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
+
+    const fmt = v => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v) + ' ₽';
+
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = `
+        <div class="hrw-card">
+            <div class="hrw-header">
+                <div class="hrw-title"><i class="fas fa-store"></i> ${currentUser?.name || 'Ресторан'}</div>
+                <div class="hrw-period">${last}</div>
+            </div>
+            <div class="hrw-kpis">
+                <div class="hrw-kpi">
+                    <div class="hrw-kpi-label">Фонд оплаты</div>
+                    <div class="hrw-kpi-value">${fmt(totalFund)}</div>
+                    ${trendDelta !== null ? `<div class="hrw-trend ${trendCls}"><i class="fas ${trendIcon}"></i> ${trendSign}${fmt(Math.abs(trendDelta))}</div>` : ''}
+                </div>
+                <div class="hrw-kpi">
+                    <div class="hrw-kpi-label">Сотрудников</div>
+                    <div class="hrw-kpi-value">${empCount}</div>
+                </div>
+                <div class="hrw-kpi">
+                    <div class="hrw-kpi-label">Оплачено</div>
+                    <div class="hrw-kpi-value">${paidPct}%</div>
+                    <div class="hrw-kpi-sub">${paidCount} из ${lastRows.length}</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function selectRestaurant(name) {
+    // Группа admin: "Все чайхана" → фильтруем по всем адресам группы
+    if (name.startsWith('__GROUP__')) {
+        const groupName = name.replace('__GROUP__', '');
+        const members = RESTAURANT_GROUPS[groupName] || [];
+        // Используем специальный массив как фильтр
+        currentRestaurant = '';
+        currentRestaurantGroup = members;
+    } else {
+        currentRestaurant = name;
+        currentRestaurantGroup = null;
+    }
+
+    // Обновить label
+    if (elements.restaurantSwitcherLabel) {
+        elements.restaurantSwitcherLabel.textContent = name || 'Все рестораны';
+    }
+
+    // Подсветить активный пункт
+    if (elements.restaurantSwitcherDropdown) {
+        elements.restaurantSwitcherDropdown.querySelectorAll('.restaurant-switcher-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.restaurant === name);
+        });
+    }
+
+    // Закрыть дропдаун
+    if (elements.restaurantSwitcher) elements.restaurantSwitcher.classList.remove('open');
+
+    // Применить фильтры везде
+    applyFilters();
+    applyDocFilters();
+    updateStatistics();
+    if (typeof applyRoundsFilters === 'function') applyRoundsFilters();
+    renderHomeRestaurantWidget();
+    if (currentScreen === 'dashboard') {
+        setTimeout(() => {
+            if (typeof _switchDashboardMode === 'function') _switchDashboardMode();
+            else renderDashboardCharts();
+        }, 50);
+    }
+}

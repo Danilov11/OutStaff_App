@@ -115,12 +115,21 @@ function getDocumentStatus(doc) {
 
 // Обновление статистики
 function updateStatistics() {
-    const processed = allDocuments.filter(d => {
+    let scopedDocuments = [...allDocuments];
+    const userAllowed = getUserRestaurants();
+    if (userAllowed) scopedDocuments = scopedDocuments.filter(d => userAllowed.includes(d.restaurant));
+    if (currentRestaurant) {
+        scopedDocuments = scopedDocuments.filter(d => d.restaurant === currentRestaurant);
+    } else if (currentRestaurantGroup) {
+        scopedDocuments = scopedDocuments.filter(d => currentRestaurantGroup.includes(d.restaurant));
+    }
+
+    const processed = scopedDocuments.filter(d => {
         const s = (d.status || d.realStatus || '').toLowerCase().trim();
         return s === 'оформлен';
     }).length;
 
-    const totalWithoutDismissed = allDocuments.filter(d => {
+    const totalWithoutDismissed = scopedDocuments.filter(d => {
         const s = (d.status || d.realStatus || '').toLowerCase().trim();
         return !s.includes('уволен') && s !== 'отказ';
     }).length;
@@ -217,7 +226,7 @@ function populateFilters(payments) {
             elements.statusFilter.appendChild(option);
         });
     }
-    
+
     console.log('Фильтры заполнены');
 }
 
@@ -274,6 +283,17 @@ function applyFilters() {
         });
     }
     
+    // Фильтр по правам доступа пользователя
+    const userAllowed = getUserRestaurants();
+    if (userAllowed) filtered = filtered.filter(p => userAllowed.includes(p.restaurant));
+
+    // Фильтр переключателя ресторана
+    if (currentRestaurant) {
+        filtered = filtered.filter(p => p.restaurant === currentRestaurant);
+    } else if (currentRestaurantGroup) {
+        filtered = filtered.filter(p => currentRestaurantGroup.includes(p.restaurant));
+    }
+
     // Фильтр по поиску
     const searchTerm = elements.searchInput ? elements.searchInput.value.toLowerCase() : '';
     if (searchTerm) {
@@ -525,8 +545,8 @@ function resetFilters() {
     console.log('Сброс фильтров');
     
     if (elements.periodYearFilter) elements.periodYearFilter.value = '';
-    if (elements.statusFilter) elements.statusFilter.value = '';
-    if (elements.searchInput) elements.searchInput.value = '';
+    if (elements.statusFilter)     elements.statusFilter.value = '';
+    if (elements.searchInput)      elements.searchInput.value = '';
     
     exitMode();
     applyFilters();
@@ -747,10 +767,17 @@ function applyDocFilters() {
         filtered = filtered.filter(d => d.position === selectedPosition);
     }
     
-    // Фильтр по ресторану
-    const selectedRestaurant = elements.docRestaurantFilter ? elements.docRestaurantFilter.value : '';
-    if (selectedRestaurant) {
-        filtered = filtered.filter(d => d.restaurant === selectedRestaurant);
+    // Фильтр по правам доступа пользователя
+    const userAllowedDoc = getUserRestaurants();
+    if (userAllowedDoc) filtered = filtered.filter(d => userAllowedDoc.includes(d.restaurant));
+
+    // Фильтр переключателя
+    const localRest = elements.docRestaurantFilter ? elements.docRestaurantFilter.value : '';
+    const effectiveRest = currentRestaurant || localRest;
+    if (effectiveRest) {
+        filtered = filtered.filter(d => d.restaurant === effectiveRest);
+    } else if (currentRestaurantGroup) {
+        filtered = filtered.filter(d => currentRestaurantGroup.includes(d.restaurant));
     }
     
     // Фильтр по проблемам
@@ -811,8 +838,12 @@ function applyRoundsFilters() {
     const status = elements.roundsStatusFilter ? elements.roundsStatusFilter.value : '';
     if (status) filtered = filtered.filter(r => r.status === status);
 
-    const restaurant = elements.roundsRestaurantFilter ? elements.roundsRestaurantFilter.value : '';
+    const userAllowedRounds = getUserRestaurants();
+    if (userAllowedRounds) filtered = filtered.filter(r => userAllowedRounds.includes(r.restaurant));
+
+    const restaurant = currentRestaurant || (elements.roundsRestaurantFilter ? elements.roundsRestaurantFilter.value : '');
     if (restaurant) filtered = filtered.filter(r => r.restaurant === restaurant);
+    else if (currentRestaurantGroup) filtered = filtered.filter(r => currentRestaurantGroup.includes(r.restaurant));
 
     const search = elements.roundsSearchInput ? elements.roundsSearchInput.value.toLowerCase() : '';
     if (search) filtered = filtered.filter(r => r.employeeName.toLowerCase().includes(search));

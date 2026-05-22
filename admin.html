@@ -273,9 +273,10 @@
   <div class="login-card">
     <div class="brand">Платформа Аутстафф</div>
     <div class="sub">Панель администратора</div>
-    <input type="password" class="inp" id="login-password" placeholder="Пароль" />
+    <input type="text" class="inp" id="login-username" placeholder="Логин" autocomplete="username" />
+    <input type="password" class="inp" id="login-password" placeholder="Пароль" autocomplete="current-password" />
     <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Войти</button>
-    <div class="err" id="login-err">Неверный пароль</div>
+    <div class="err" id="login-err">Неверный логин или пароль</div>
   </div>
 </div>
 
@@ -289,191 +290,15 @@
   </div>
 
   <div class="adm-body">
+    <div id="admin-screen"></div>
+  </div>
 
-    <!-- Tabs -->
-    <div class="adm-tabs">
-      <div class="adm-tab active" onclick="showTab('import')"><i class="fas fa-file-excel"></i> Импорт Excel</div>
-      <div class="adm-tab" onclick="showTab('restaurants')"><i class="fas fa-utensils"></i> Рестораны</div>
-    </div>
-
-    <!-- ─── IMPORT TAB ─── -->
-    <div class="adm-panel active" id="tab-import">
-
-      <!-- Steps -->
-      <div class="steps">
-        <div class="step active" id="step-ind-1">
-          <div class="step-num">1</div> Ресторан и период
-        </div>
-        <div class="step-line" id="step-line-1"></div>
-        <div class="step" id="step-ind-2">
-          <div class="step-num">2</div> Excel файл
-        </div>
-        <div class="step-line" id="step-line-2"></div>
-        <div class="step" id="step-ind-3">
-          <div class="step-num">3</div> Маппинг колонок
-        </div>
-        <div class="step-line" id="step-line-3"></div>
-        <div class="step" id="step-ind-4">
-          <div class="step-num">4</div> Импорт
-        </div>
-      </div>
-
-      <!-- STEP 1: Restaurant + Period -->
-      <div class="adm-card" id="step-1">
-        <h3>Шаг 1 — Ресторан и расчётный период</h3>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label>Ресторан</label>
-            <select id="sel-restaurant">
-              <option value="">Загрузка…</option>
-            </select>
-          </div>
-          <div class="form-group" style="max-width:160px">
-            <label>или создать новый</label>
-            <input type="text" id="inp-new-restaurant" placeholder="Название ресторана" />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group" style="max-width:120px">
-            <label>Год</label>
-            <input type="number" id="inp-year" value="2026" min="2020" max="2030" />
-          </div>
-          <div class="form-group" style="max-width:200px">
-            <label>Метка периода</label>
-            <input type="text" id="inp-period-label" placeholder="напр. 1-31.01" />
-          </div>
-          <div class="form-group" style="max-width:200px">
-            <label>Тип данных</label>
-            <select id="sel-data-type">
-              <option value="payroll">Выплаты (зарплата)</option>
-              <option value="documents">Документы сотрудников</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="btn-row">
-          <button class="btn btn-primary" onclick="goStep(2)">
-            Далее <i class="fas fa-arrow-right"></i>
-          </button>
-        </div>
-      </div>
-
-      <!-- STEP 2: File upload (hidden initially) -->
-      <div class="adm-card hidden" id="step-2">
-        <h3>Шаг 2 — Загрузить Excel файл</h3>
-
-        <div class="dropzone" id="dropzone" onclick="document.getElementById('file-input').click()">
-          <i class="fas fa-file-excel"></i>
-          <div class="dz-title">Нажмите или перетащите файл</div>
-          <div class="dz-sub">Поддерживаются .xlsx, .xls, .csv</div>
-        </div>
-        <input type="file" id="file-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleFile(this.files[0])">
-
-        <div class="form-row hidden" id="sheet-selector-row" style="margin-top:16px">
-          <div class="form-group">
-            <label>Лист в файле</label>
-            <select id="sel-sheet" onchange="loadSheet()"></select>
-          </div>
-          <div class="form-group" style="max-width:160px">
-            <label>Строка заголовков</label>
-            <input type="number" id="inp-header-row" value="1" min="1" max="10" onchange="loadSheet()" />
-          </div>
-        </div>
-
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="goStep(1)"><i class="fas fa-arrow-left"></i> Назад</button>
-          <button class="btn btn-primary hidden" id="btn-step2-next" onclick="goStep(3)">
-            Далее <i class="fas fa-arrow-right"></i>
-          </button>
-        </div>
-      </div>
-
-      <!-- STEP 3: Column mapping (hidden initially) -->
-      <div class="adm-card hidden" id="step-3">
-        <h3>Шаг 3 — Маппинг колонок</h3>
-        <p style="font-size:13px;color:var(--tx2);margin-bottom:16px">
-          Укажите какая колонка Excel соответствует какому полю. Система попыталась определить автоматически.
-        </p>
-
-        <div id="col-mapper-wrap"></div>
-
-        <div style="margin-top:20px">
-          <h3>Предпросмотр (первые 5 строк)</h3>
-          <div class="preview-wrap" id="preview-wrap"></div>
-        </div>
-
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="goStep(2)"><i class="fas fa-arrow-left"></i> Назад</button>
-          <button class="btn btn-primary" onclick="goStep(4)">
-            Импортировать <i class="fas fa-upload"></i>
-          </button>
-        </div>
-      </div>
-
-      <!-- STEP 4: Import (hidden initially) -->
-      <div class="adm-card hidden" id="step-4">
-        <h3>Шаг 4 — Импорт в базу данных</h3>
-
-        <div class="alert alert-info show" id="import-summary">
-          <i class="fas fa-info-circle"></i>
-          <span id="import-summary-text"></span>
-        </div>
-
-        <div class="import-progress" id="import-progress">
-          <div style="font-size:13px;font-weight:600;color:var(--tx2)" id="prog-label">Подготовка…</div>
-          <div class="prog-bar-wrap"><div class="prog-bar" id="prog-bar"></div></div>
-          <div class="prog-log" id="prog-log"></div>
-        </div>
-
-        <div class="alert" id="import-result"></div>
-
-        <div class="btn-row">
-          <button class="btn btn-secondary" id="btn-back-3" onclick="goStep(3)"><i class="fas fa-arrow-left"></i> Назад</button>
-          <button class="btn btn-primary" id="btn-start-import" onclick="startImport()">
-            <i class="fas fa-play"></i> Запустить импорт
-          </button>
-          <button class="btn btn-primary hidden" id="btn-new-import" onclick="resetImport()">
-            <i class="fas fa-plus"></i> Новый импорт
-          </button>
-        </div>
-      </div>
-
-    </div><!-- /tab-import -->
-
-    <!-- ─── RESTAURANTS TAB ─── -->
-    <div class="adm-panel" id="tab-restaurants">
-      <div class="adm-card">
-        <h3>Добавить ресторан</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Название</label>
-            <input type="text" id="inp-rest-name" placeholder="напр. СУЩЕВКА" style="text-transform:uppercase" />
-          </div>
-          <div style="display:flex;align-items:flex-end">
-            <button class="btn btn-primary" onclick="addRestaurant()">
-              <i class="fas fa-plus"></i> Добавить
-            </button>
-          </div>
-        </div>
-        <div class="alert" id="rest-alert"></div>
-      </div>
-
-      <div class="adm-card">
-        <h3>Список ресторанов</h3>
-        <div class="rest-list" id="rest-list">
-          <div style="color:var(--tx2);font-size:13px">Загрузка…</div>
-        </div>
-      </div>
-    </div><!-- /tab-restaurants -->
-
-  </div><!-- /adm-body -->
 </div><!-- /admin-app -->
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
+<script src="js/api.js"></script>
 <script src="js/admin.js"></script>
 </body>
 </html>
